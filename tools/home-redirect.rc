@@ -1,0 +1,6 @@
+service home_redirect /system/bin/sh /data/local/tmp/echo-dashboard-home-redirect.sh
+    class late_start
+    user shell
+    group shell log
+    seclabel u:r:shell:s0
+    oneshot

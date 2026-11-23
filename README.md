@@ -38,13 +38,17 @@ As far as I know, the only way to get an APK onto the Echo Show is LAT.
 ## Home button
 
 `tools/home-redirect.sh` watches logcat for the stock HOME intent and starts
-the dashboard instead. It runs as adb shell, needs no root, and does not
-survive a reboot.
+the dashboard instead. It runs as shell and needs no root.
 
 ```sh
-adb push tools/home-redirect.sh /data/local/tmp/
-adb shell sh /data/local/tmp/home-redirect.sh
+adb push tools/home-redirect.sh /data/local/tmp/echo-dashboard-home-redirect.sh
+adb shell chmod 700 /data/local/tmp/echo-dashboard-home-redirect.sh
+adb shell sh /data/local/tmp/echo-dashboard-home-redirect.sh
 ```
+
+To start it at boot, install `tools/home-redirect.rc` as
+`/odm/etc/init/home-redirect.rc`. That one-time write needs root. The service
+then runs as shell on every boot.
 
 `tools/firetv-launch-bridge.sh` is a fixed-action bridge that launches the
 Fire TV interface on request. It executes only the fixed action and never
