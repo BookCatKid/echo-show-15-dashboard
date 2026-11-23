@@ -1,11 +1,12 @@
-# Echo Show dashboard
+# Echo Show 15 dashboard
 
 Native Android home screen for the Amazon Echo Show 15 (1st gen). It draws a
 Home Assistant dashboard, subscribes to the Home Assistant WebSocket API, and
 shows calendar, weather and smart-home widgets.
 
-This is an example custom dashboard you can run on a Show rooted with
-[hoya-runtime-root](https://github.com/BookCatKid/hoya-runtime-root).
+This is an example custom dashboard for the Echo Show 15. The dashboard app
+does not require root. See [hoya-runtime-root](https://github.com/BookCatKid/hoya-runtime-root)
+if you want runtime root.
 
 - Package: `com.bookcatkid.launcher`
 - Label: `Home`
@@ -38,7 +39,7 @@ As far as I know, the only way to get an APK onto the Echo Show is LAT.
 ## Home button
 
 `tools/home-redirect.sh` watches logcat for the stock HOME intent and starts
-the dashboard instead. It runs as shell and needs no root.
+the dashboard instead. It runs as shell.
 
 ```sh
 adb push tools/home-redirect.sh /data/local/tmp/echo-dashboard-home-redirect.sh
@@ -47,8 +48,8 @@ adb shell sh /data/local/tmp/echo-dashboard-home-redirect.sh
 ```
 
 To start it at boot, install `tools/home-redirect.rc` as
-`/odm/etc/init/home-redirect.rc`. That one-time write needs root. The service
-then runs as shell on every boot.
+`/odm/etc/init/home-redirect.rc`. That write needs root. The service then runs
+as shell on every boot.
 
 ## Vendored libraries
 
