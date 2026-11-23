@@ -1,4 +1,4 @@
-package com.echo.testlauncher;
+package com.bookcatkid.launcher;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;

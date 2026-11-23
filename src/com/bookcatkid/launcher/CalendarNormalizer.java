@@ -1,4 +1,4 @@
-package com.echo.testlauncher;
+package com.bookcatkid.launcher;
 
 import org.json.JSONArray;
 import org.json.JSONException;

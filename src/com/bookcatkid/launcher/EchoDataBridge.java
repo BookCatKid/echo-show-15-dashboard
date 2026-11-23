@@ -1,4 +1,4 @@
-package com.echo.testlauncher;
+package com.bookcatkid.launcher;
 
 import android.system.Os;
 import android.system.StructStat;
@@ -27,7 +27,7 @@ public final class EchoDataBridge {
     private static final long WEATHER_REFRESH_MS = 300000;
     private static final int MAX_INPUT_BYTES = 4_000_000;
 
-    private static final String DEFAULT_DIRECTORY = "/data/user/0/com.echo.testlauncher/files";
+    private static final String DEFAULT_DIRECTORY = "/data/user/0/com.bookcatkid.launcher/files";
     private static final String WEATHER_URI =
             "content://com.amazon.paladin.weather.provider/weather";
     private static final String CALENDAR_SOURCE =

@@ -1,4 +1,4 @@
-package com.echo.testlauncher;
+package com.bookcatkid.launcher;
 
 import android.app.Dialog;
 import android.content.Context;

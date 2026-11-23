@@ -1,4 +1,4 @@
-package com.echo.testlauncher;
+package com.bookcatkid.launcher;
 
 import android.app.Activity;
 import android.content.res.ColorStateList;

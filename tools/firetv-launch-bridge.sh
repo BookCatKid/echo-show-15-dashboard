@@ -1,7 +1,7 @@
 #!/system/bin/sh
 # Fixed-action bridge for the owner-managed Echo. Never execute request contents.
 umask 077
-dir=/data/user/0/com.echo.testlauncher/files
+dir=/data/user/0/com.bookcatkid.launcher/files
 request="$dir/firetv-launch-request"
 while true; do
     if [ -f "$request" ] && [ ! -L "$request" ]; then

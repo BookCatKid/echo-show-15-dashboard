@@ -7,7 +7,7 @@ shows calendar and smart-home widgets.
 This is an example custom dashboard you can run on a Show rooted with
 [hoya-runtime-root](https://github.com/BookCatKid/hoya-runtime-root).
 
-- Package: `com.echo.testlauncher`
+- Package: `com.bookcatkid.launcher`
 - Label: `Home`
 - `minSdk`/`targetSdk` 28
 

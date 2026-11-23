@@ -7,7 +7,7 @@ set -u
     case "$line" in
         *"START u0 {"*"act=android.intent.action.MAIN "*"cat=["*"android.intent.category.HOME"*"]"*"cmp=com.amazon.paladin/.app.MMLauncherActivity}"*"from uid "*)
             printf '%s: HOME redirected to dashboard\n' "$(date)"
-            /system/bin/am start --user 0 -n com.echo.testlauncher/.MainActivity -f 0x14000000
+            /system/bin/am start --user 0 -n com.bookcatkid.launcher/.MainActivity -f 0x14000000
             ;;
     esac
 done
