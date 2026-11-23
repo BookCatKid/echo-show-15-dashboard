@@ -4,6 +4,9 @@ Native Android home screen for the Amazon Echo Show 15 (1st gen). It draws a
 Home Assistant dashboard, subscribes to the Home Assistant WebSocket API, and
 shows calendar and smart-home widgets.
 
+This is an example custom dashboard you can run on a Show rooted with
+[hoya-runtime-root](https://github.com/BookCatKid/hoya-runtime-root).
+
 - Package: `com.echo.testlauncher`
 - Label: `Home`
 - `minSdk`/`targetSdk` 28
@@ -30,15 +33,18 @@ key.
 
 ## Install
 
-```sh
-adb install build/dashboard.apk
-```
+As far as I know, the only way to get an APK onto the Echo Show is LAT.
 
 ## Home button
 
 `tools/home-redirect.sh` watches logcat for the stock HOME intent and starts
 the dashboard instead. It runs as adb shell, needs no root, and does not
 survive a reboot.
+
+```sh
+adb push tools/home-redirect.sh /data/local/tmp/
+adb shell sh /data/local/tmp/home-redirect.sh
+```
 
 `tools/firetv-launch-bridge.sh` is a fixed-action bridge that launches the
 Fire TV interface on request. It executes only the fixed action and never

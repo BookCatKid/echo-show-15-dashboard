@@ -2,352 +2,1013 @@ package com.echo.testlauncher;
 
 import android.app.Activity;
 import android.content.res.ColorStateList;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.graphics.drawable.RippleDrawable;
-import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.ClipDrawable;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
-import android.widget.*;
-import org.json.*;
-import java.util.*;
-import java.util.concurrent.*;
+import android.widget.Button;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.SeekBar;
+import android.widget.TextView;
+import android.widget.Toast;
 
-/** A native household control overlay using the existing HA client. */
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+/**
+ * Household control overlay built on the dashboard's Home Assistant client.
+ *
+ * <p>The entity identifiers below belong to one installation. Replace them with the
+ * entities of the household you are deploying to.
+ */
 final class SmartHomeOverlay {
-    private static final int BG=0xff22232c, TILE=0xff32343e, LIGHT=0xffffd49f,
-            CLIMATE=0xffa9caff, FAN=0xffa5e5ce, INK=DashboardPopup.INK, MUTED=DashboardPopup.MUTED;
-    private static final String WHF="light.shelly0110dimg3_80b54e25b874", TIMER="timer.bedtime",
-            HVAC="climate.thermostat", SHADE="cover.somfy_bridge_somfy_shade";
-    private static final String[][] INSIDE={
-        {"switch.poang_chair_light","Poang Chair Light"},{"switch.credenza_lamp","Credenza Light"},
-        {"switch.rf_bridge_downstairs_lights","Dining Lights"},{"switch.rf_bridge_smart_hab_lights","Bedroom Light"},
-        {"switch.jenns_lamp","Jenn’s Lamp"},{"switch.bathroom_lamp","Bathroom Light"},
-        {"switch.yankees_light","Yankee’s Light"},{"light.simons_lights","Simon’s Lights"},
-        {"switch.snake_light","Snake Light"}
+
+    private static final int BACKGROUND = 0xff22232c;
+    private static final int TILE = 0xff32343e;
+    private static final int LIGHT = 0xffffd49f;
+    private static final int CLIMATE = 0xffa9caff;
+    private static final int FAN = 0xffa5e5ce;
+    private static final int INK = DashboardPopup.INK;
+    private static final int MUTED = DashboardPopup.MUTED;
+    private static final int COOL = 0xffa9caff;
+    private static final int HEAT = 0xffffb28b;
+
+    private static final int LIGHT_ON_TILE = 0xff5a4938;
+    private static final int CLIMATE_TILE = 0xff273346;
+    private static final int FAN_TILE = 0xff253d39;
+    private static final int SHADE_TILE = 0xff443a30;
+    private static final int TARGET_PANEL = 0xff1e293a;
+    private static final int TIMER_PANEL = 0xff1d312d;
+    private static final int CONTROL_BACKGROUND = 0xff35445b;
+    private static final int FAN_CONTROL_BACKGROUND = 0xff39534d;
+    private static final int SLIDER_TRACK = 0xff52605d;
+    private static final int RIPPLE = 0x28ffffff;
+
+    private static final long LIVE_REFRESH_MS = 6000;
+    private static final long REST_REFRESH_MS = 3000;
+    private static final long BUSY_RETRY_MS = 1000;
+    private static final int OVERLAY_HEIGHT_DP = 2000;
+    private static final int EDGE_MARGIN_DP = 48;
+    private static final int EDGE_MARGIN_BOTTOM_DP = 64;
+    private static final int SECTION_GAP_DP = 18;
+    private static final int TILE_GAP_DP = 10;
+
+    private static final String WHOLE_HOUSE_FAN = "light.shelly0110dimg3_80b54e25b874";
+    private static final String SLEEP_TIMER = "timer.bedtime";
+    private static final String THERMOSTAT = "climate.thermostat";
+    private static final String SHADE = "cover.somfy_bridge_somfy_shade";
+
+    private static final String[][] INSIDE_LIGHTS = {
+            {"switch.poang_chair_light", "Poang Chair Light"},
+            {"switch.credenza_lamp", "Credenza Light"},
+            {"switch.rf_bridge_downstairs_lights", "Dining Lights"},
+            {"switch.rf_bridge_smart_hab_lights", "Bedroom Light"},
+            {"switch.jenns_lamp", "Jenn's Lamp"},
+            {"switch.bathroom_lamp", "Bathroom Light"},
+            {"switch.yankees_light", "Yankee's Light"},
+            {"light.simons_lights", "Simon's Lights"},
+            {"switch.snake_light", "Snake Light"}
     };
-    private static final String[][] OUTSIDE={
-        {"light.front_door_left_light","Front Door Left"},{"light.front_door_right_light","Front Door Right"},
-        {"switch.tp_link_smart_plug_1050_bush_lights","Bush Lights"},{"switch.pool_light","Pool Light"}
+
+    private static final String[][] OUTSIDE_LIGHTS = {
+            {"light.front_door_left_light", "Front Door Left"},
+            {"light.front_door_right_light", "Front Door Right"},
+            {"switch.tp_link_smart_plug_1050_bush_lights", "Bush Lights"},
+            {"switch.pool_light", "Pool Light"}
     };
-    private final Activity activity;private final HaClient client;private final DashboardPopup popup;
-    private final Handler ui=new Handler(Looper.getMainLooper());
-    private final ExecutorService io=Executors.newSingleThreadExecutor();
-    private final ExecutorService commands=Executors.newSingleThreadExecutor();
-    private final Set<String> pendingActions=new HashSet<>();
-    private final Map<String,JSONObject> states=new HashMap<>();
-    private final Set<String> ids=new HashSet<>();
-    private final ScrollView scroll;private final LinearLayout content;
-    private boolean closed,busy,dragging;private String signature="";
+
+    private static final Set<String> DIMMABLE_COLOR_MODES = new HashSet<>(Arrays.asList(
+            "brightness", "color_temp", "hs", "xy", "rgb", "rgbw", "rgbww", "white"));
+
+    private final Activity activity;
+    private final HaClient client;
     private final HaStateFeed feed;
-    private final HaStateFeed.Listener listener=this::liveChanged;
+    private final DashboardPopup popup;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService commandExecutor = Executors.newSingleThreadExecutor();
+
+    private final Set<String> pendingActions = new HashSet<>();
+    private final Map<String, JSONObject> states = new HashMap<>();
+    private final Set<String> entityIds = new HashSet<>();
+    private final ScrollView scrollView;
+    private final LinearLayout content;
+
+    private boolean closed;
+    private boolean busy;
+    private boolean dragging;
     private boolean redrawPending;
-    private final Runnable redraw=()->{
-        if(closed)return;
-        if(dragging){redrawPending=true;return;}
-        redrawPending=false;
-        String next=fingerprint();if(!next.equals(signature)){signature=next;render();}
+    private String signature = "";
+
+    private final HaStateFeed.Listener listener = this::liveChanged;
+
+    private final Runnable redraw = () -> {
+        if (closed) {
+            return;
+        }
+        if (dragging) {
+            redrawPending = true;
+            return;
+        }
+        redrawPending = false;
+        String next = fingerprint();
+        if (!next.equals(signature)) {
+            signature = next;
+            render();
+        }
     };
-    SmartHomeOverlay(Activity activity,HaClient client,HaStateFeed feed){
-        this.feed=feed;
-        this.activity=activity;this.client=client;popup=new DashboardPopup(activity,"Smart Home",BG,LIGHT);
-        for(String[][] group:new String[][][]{INSIDE,OUTSIDE})for(String[] item:group)ids.add(item[0]);
-        Collections.addAll(ids,WHF,TIMER,HVAC,SHADE,"sensor.thermostat_temperature","sensor.thermostat_humidity","sensor.downstairs_temperature","sensor.downstairs_outside_temperature");
-        scroll=new ScrollView(activity);scroll.setVerticalScrollBarEnabled(true);scroll.setScrollbarFadingEnabled(false);
-        content=popup.column();scroll.addView(content,new ScrollView.LayoutParams(-1,-2));
-        popup.body.addView(scroll,new LinearLayout.LayoutParams(-1,-1));
-        popup.actions.setPadding(0,popup.dp(16),0,0);
-        popup.actions.addView(new View(activity),new LinearLayout.LayoutParams(0,1,1));
-        popup.actions.addView(popup.button("Refresh",LIGHT,TILE,()->{if(feed!=null)feed.requestSnapshot();refresh(true);}));
-        LinearLayout.LayoutParams closeParams=new LinearLayout.LayoutParams(-2,-2);closeParams.leftMargin=popup.dp(16);
-        popup.actions.addView(popup.button("Close",INK,TILE,()->popup.dismiss()),closeParams);
-        popup.setOnDismissListener(d->{closed=true;if(feed!=null)feed.remove(listener);ui.removeCallbacksAndMessages(null);io.shutdown();commands.shutdown();});
-    }
-    void open(){
-        popup.open(false,2000);Window w=popup.getWindow();android.util.DisplayMetrics dm=new android.util.DisplayMetrics();
-        w.getWindowManager().getDefaultDisplay().getMetrics(dm);
-        w.setLayout(dm.widthPixels-popup.dp(48),dm.heightPixels-popup.dp(64));
-        w.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
-        content.addView(label("Loading devices…",26,MUTED,false));if(feed!=null)feed.add(listener);refresh(true);
-    }
-    private TextView label(String s,int size,int color,boolean bold){
-        TextView v=popup.label(s,size,color,bold);
-        try{v.setTypeface(Typeface.createFromFile("/system/fonts/Amazon-Ember-"+(bold?"Medium":"Regular")+".ttf"));}catch(Exception ignored){}
-        return v;
-    }
-    private void liveChanged(Set<String> changed,boolean reset){
-        if(closed)return;
-        if(feed==null||!feed.ready()){refresh(false);return;}
-        if(reset||!Collections.disjoint(ids,changed)){
-            copyLive();
-            ui.removeCallbacks(redraw);ui.post(redraw);
-        }
-    }
-    private void copyLive(){
-        states.clear();for(String id:ids){JSONObject value=feed.get(id);if(value!=null)states.put(id,value);}
-    }
-    private void refresh(boolean force){
-        if(closed)return;
-        ui.removeCallbacks(poll);
-        if(feed!=null&&feed.ready()){
-            copyLive();if(force)signature="";redraw.run();ui.postDelayed(poll,6000);return;
-        }
-        if(busy||dragging){ui.postDelayed(poll,1000);return;}
-        busy=true;
-        io.execute(()->{try{
-            JSONArray array=client.getStates();Map<String,JSONObject> result=new HashMap<>();
-            for(int i=0;i<array.length();i++){JSONObject state=array.optJSONObject(i);if(state!=null&&ids.contains(state.optString("entity_id")))result.put(state.optString("entity_id"),state);}
-            ui.post(()->{if(closed)return;busy=false;if(feed!=null&&feed.ready())copyLive();else{states.clear();states.putAll(result);}
-                if(force)signature="";redraw.run();ui.postDelayed(poll,3000);
-            });
-        }catch(Exception e){ui.post(()->{if(closed)return;busy=false;if(feed!=null&&feed.ready())copyLive();else states.clear();signature="";redraw.run();ui.postDelayed(poll,3000);});}});
-    }
-    private final Runnable poll=()->refresh(false);
-    private String fingerprint(){
-        StringBuilder b=new StringBuilder();
-        for(String id:new TreeSet<>(ids)){JSONObject s=states.get(id);if(s!=null)b.append(id).append(s.optString("state")).append(s.optJSONObject("attributes"));}
-        if("active".equals(state(TIMER)))b.append(System.currentTimeMillis()/60000);
-        return b.toString();
-    }
-    private JSONObject attr(String id){JSONObject s=states.get(id);JSONObject a=s==null?null:s.optJSONObject("attributes");return a==null?new JSONObject():a;}
-    private String state(String id){JSONObject s=states.get(id);return s==null?"unavailable":s.optString("state","unknown");}
-    private boolean available(String id){String s=state(id);return !s.equals("unavailable")&&!s.equals("unknown");}
-    private String domain(String id){return id.substring(0,id.indexOf('.'));}
-    private void service(String id,String action,JSONObject extras){
-        if(closed||!available(id))return;
-        // Different devices can be queued immediately, with duplicate taps on the same
-        // pending device blocked until HA has acknowledged the previous request.
-        if(!pendingActions.add(id))return;
-        try{JSONObject data=extras==null?new JSONObject():extras;data.put("entity_id",id);
-            commands.execute(()->{String error=null;try{client.call(domain(id),action,data,false);}catch(Exception e){error="Action failed";}
-                final String err=error;ui.post(()->{pendingActions.remove(id);if(closed)return;
-                    if(err!=null)Toast.makeText(activity,err,Toast.LENGTH_SHORT).show();
-                    if(feed==null||!feed.ready())refresh(true);else{copyLive();redraw.run();}
-                });});
-        }catch(JSONException e){pendingActions.remove(id);}
-    }
-    private JSONObject args(String key,Object value){JSONObject o=new JSONObject();try{o.put(key,value);}catch(JSONException ignored){}return o;}
-    private void toggle(String id){service(id,"on".equals(state(id))?"turn_off":"turn_on",null);}
-    private void render(){
-        int y=scroll.getScrollY();content.removeAllViews();
-        section("Indoor lights",LIGHT);lights(INSIDE);
-        section("Outdoor lights",LIGHT);lights(OUTSIDE);
-        section("Whole house fan",FAN);fan();
-        section("Shade",LIGHT);shade();
-        section("Climate",CLIMATE);climate();
-        scroll.post(()->scroll.scrollTo(0,y));
-    }
-    private void section(String title,int color){popup.gap(content,18);content.addView(label(title,26,color,true));popup.gap(content,10);}
-    private LinearLayout tile(int bg){LinearLayout t=popup.column();t.setPadding(popup.dp(18),popup.dp(16),popup.dp(18),popup.dp(16));t.setBackground(popup.shape(bg,16));return t;}
-    private void fill(LinearLayout row,View v,int margin){
-        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1);p.rightMargin=popup.dp(margin);row.addView(v,p);
-    }
-    private void addTile(LinearLayout row){content.addView(row,new LinearLayout.LayoutParams(-1,-2));popup.gap(content,10);}
-    private String capitalize(String s){return s.isEmpty()?s:Character.toUpperCase(s.charAt(0))+s.substring(1).replace('_',' ');}
-    private boolean dimmable(String id){
-        if(!id.startsWith("light."))return false;
-        JSONObject a=attr(id);JSONArray modes=a.optJSONArray("supported_color_modes");
-        if(modes!=null)for(int i=0;i<modes.length();i++){
-            String mode=modes.optString(i);
-            if(Arrays.asList("brightness","color_temp","hs","xy","rgb","rgbw","rgbww","white").contains(mode))return true;
-        }
-        return !a.isNull("brightness");
-    }
-    private void lights(String[][] group){
-        int cols=activity.getResources().getConfiguration().orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE?4:3;
-        for(int i=0;i<group.length;i+=cols){
-            LinearLayout row=popup.row();row.setGravity(Gravity.TOP);
-            for(int j=0;j<cols;j++){
-                if(i+j>=group.length){fill(row,new View(activity),j==cols-1?0:10);continue;}
-                String id=group[i+j][0],name=group[i+j][1];
-                boolean on="on".equals(state(id)),ok=available(id),dim=dimmable(id);
-                int pct=on?Math.max(1,Math.round(attr(id).optInt("brightness",255)*100f/255)):0;
-                LinearLayout card=tile(on?0xff5a4938:TILE);
-                LinearLayout power=popup.column(),top=popup.row();ImageView icon=new ImageView(activity);
-                int res=activity.getResources().getIdentifier("ic_lightbulb","drawable",activity.getPackageName());
-                if(res!=0){icon.setImageResource(res);icon.setColorFilter(on?LIGHT:MUTED);}
-                top.addView(icon,new LinearLayout.LayoutParams(popup.dp(36),popup.dp(36)));
-                TextView nameView=label(name,22,INK,true);nameView.setMaxLines(2);
-                LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-2,1);lp.leftMargin=popup.dp(12);top.addView(nameView,lp);power.addView(top);
-                popup.gap(power,8);
-                LinearLayout statusRow=popup.row();statusRow.addView(label(ok?(on?"On":"Off"):"Unavailable",19,on?LIGHT:MUTED,false),new LinearLayout.LayoutParams(0,-2,1));
-                TextView value=label(ok&&dim?(on&&attr(id).isNull("brightness")?"—":pct+"%"):"",21,on?LIGHT:MUTED,true);
-                statusRow.addView(value);power.addView(statusRow);card.addView(power,new LinearLayout.LayoutParams(-1,-2));
-                power.setMinimumHeight(popup.dp(68));power.setContentDescription(name+", "+(ok?(on?"on":"off"):"unavailable"));
-                power.setBackground(new RippleDrawable(ColorStateList.valueOf(0x28ffffff),popup.shape(Color.TRANSPARENT,12),popup.shape(Color.WHITE,12)));
-                power.setEnabled(ok);power.setOnClickListener(v->toggle(id));
-                card.setMinimumHeight(popup.dp(118));
-                if(dim){
-                    popup.gap(card,4);
-                    if(ok)percentSlider(card,name+" brightness",pct,LIGHT,value,n->{
-                        if(n==pct)return;
-                        if(n==0)service(id,"turn_off",null);else service(id,"turn_on",args("brightness_pct",n));
-                    });
-                    else card.addView(label("Brightness unavailable",18,MUTED,false));
-                }else{
-                    card.setContentDescription(name+", "+(ok?(on?"on":"off"):"unavailable"));
-                    card.setBackground(new RippleDrawable(ColorStateList.valueOf(0x28ffffff),popup.shape(on?0xff5a4938:TILE,16),popup.shape(Color.WHITE,16)));
-                    card.setEnabled(ok);card.setOnClickListener(v->toggle(id));
-                }
-                fill(row,card,j==cols-1?0:10);
-            }addTile(row);
-        }
-    }
-    private static final int COOL=0xffa9caff, HEAT=0xffffb28b, CONTROL=0xff41434f;
-    private Button control(String name,int fg,int bg,int height,Runnable action){
-        Button b=popup.button(name,fg,bg,action);
-        b.setTextSize(23);b.setMinHeight(popup.dp(height));b.setMinimumHeight(popup.dp(height));
-        b.setPadding(popup.dp(8),0,popup.dp(8),0);
-        try{b.setTypeface(Typeface.createFromFile("/system/fonts/Amazon-Ember-Medium.ttf"));}catch(Exception ignored){}
-        return b;
-    }
-    private void equal(LinearLayout row,View v,int height,int margin){
-        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,height<0?height:popup.dp(height),1);
-        lp.rightMargin=popup.dp(margin);row.addView(v,lp);
-    }
-    private String degrees(double n){
-        return Double.isFinite(n)?String.format(Locale.US,n==Math.rint(n)?"%.0f°":"%.1f°",n):"—";
-    }
-    private String modeLabel(String mode){
-        return mode.equals("heat_cool")?"Auto":capitalize(mode);
-    }
-    private void climate(){
-        LinearLayout t=tile(0xff273346);JSONObject a=attr(HVAC);
-        if(!available(HVAC)){t.addView(label("Thermostat unavailable",24,MUTED,false));addTile(t);return;}
-        String mode=state(HVAC),action=a.optString("hvac_action",mode);
-        int activeColor=mode.equals("heat")?HEAT:COOL;
-        double current=a.optDouble("current_temperature",Double.NaN);
-        double humidity=a.optDouble("current_humidity",Double.NaN);
-        if(!Double.isFinite(humidity))try{humidity=Double.parseDouble(state("sensor.thermostat_humidity"));}catch(Exception ignored){}
-        LinearLayout header=popup.row(),reading=popup.column(),details=popup.column();
-        reading.addView(label("Indoor temperature",20,MUTED,false));
-        reading.addView(label(degrees(current),64,INK,true));
-        header.addView(reading,new LinearLayout.LayoutParams(0,-2,1));
-        TextView hvac=label(capitalize(action),29,action.equals("heating")?HEAT:action.equals("cooling")?COOL:MUTED,true);hvac.setGravity(Gravity.END);
-        details.addView(hvac);
-        if(Double.isFinite(humidity)){TextView h=label(String.format(Locale.US,"%.0f%% humidity",humidity),22,MUTED,false);h.setGravity(Gravity.END);details.addView(h);}
-        header.addView(details);t.addView(header);
-        popup.gap(t,16);
-        JSONArray modes=a.optJSONArray("hvac_modes");LinearLayout buttons=popup.row();
-        if(modes!=null)for(int i=0;i<modes.length();i++){
-            String m=modes.optString(i);boolean selected=m.equals(mode);int selectedColor=m.equals("heat")?HEAT:m.equals("off")?MUTED:COOL;
-            equal(buttons,control(modeLabel(m),selected?BG:INK,selected?selectedColor:0xff35445b,62,()->service(HVAC,"set_hvac_mode",args("hvac_mode",m))),62,i==modes.length()-1?0:8);
-        }
-        t.addView(buttons);
-        if(mode.equals("heat_cool")){
-            double low=a.optDouble("target_temp_low",Double.NaN),high=a.optDouble("target_temp_high",Double.NaN);
-            if(Double.isFinite(low)&&Double.isFinite(high)){
-                popup.gap(t,14);LinearLayout range=popup.row();
-                equal(range,targetPanel(a,"target_temp_low","Heat to",low,HEAT),-2,10);
-                equal(range,targetPanel(a,"target_temp_high","Cool to",high,COOL),-2,0);t.addView(range);
+
+    SmartHomeOverlay(Activity activity, HaClient client, HaStateFeed feed) {
+        this.activity = activity;
+        this.client = client;
+        this.feed = feed;
+        this.popup = new DashboardPopup(activity, "Smart Home", BACKGROUND, LIGHT);
+
+        for (String[][] group : new String[][][]{INSIDE_LIGHTS, OUTSIDE_LIGHTS}) {
+            for (String[] light : group) {
+                entityIds.add(light[0]);
             }
-        }else if(!mode.equals("off")){
-            double target=a.optDouble("temperature",Double.NaN);
-            if(Double.isFinite(target)){popup.gap(t,14);t.addView(targetPanel(a,"temperature",mode.equals("heat")?"Heat to":mode.equals("cool")?"Cool to":"Target",target,activeColor));}
         }
-        addTile(t);
-    }
-    private LinearLayout targetPanel(JSONObject a,String key,String name,double value,int color){
-        double step=a.optDouble("target_temp_step",1);final double delta=Double.isFinite(step)&&step>0?step:1;
-        LinearLayout panel=tile(0xff1e293a);panel.setPadding(popup.dp(12),popup.dp(12),popup.dp(12),popup.dp(12));
-        TextView title=label(name,22,color,true);title.setGravity(Gravity.CENTER);panel.addView(title);
-        popup.gap(panel,8);LinearLayout row=popup.row();
-        Button minus=control("−",color,0xff35445b,64,()->target(a,key,value-delta));
-        Button plus=control("+",color,0xff35445b,64,()->target(a,key,value+delta));
-        minus.setTextSize(34);plus.setTextSize(34);
-        minus.setContentDescription("Decrease "+name.toLowerCase(Locale.US));plus.setContentDescription("Increase "+name.toLowerCase(Locale.US));
-        minus.setEnabled(value-delta>=a.optDouble("min_temp",Double.NEGATIVE_INFINITY)&&(!key.equals("target_temp_high")||value-delta>a.optDouble("target_temp_low",Double.NEGATIVE_INFINITY)));
-        plus.setEnabled(value+delta<=a.optDouble("max_temp",Double.POSITIVE_INFINITY)&&(!key.equals("target_temp_low")||value+delta<a.optDouble("target_temp_high",Double.POSITIVE_INFINITY)));
-        row.addView(minus,new LinearLayout.LayoutParams(popup.dp(66),popup.dp(64)));
-        TextView num=label(degrees(value),42,color,true);num.setGravity(Gravity.CENTER);
-        row.addView(num,new LinearLayout.LayoutParams(0,-2,1));
-        row.addView(plus,new LinearLayout.LayoutParams(popup.dp(66),popup.dp(64)));panel.addView(row);
-        return panel;
-    }
-    private void target(JSONObject a,String key,double value){
-        double min=a.optDouble("min_temp",value),max=a.optDouble("max_temp",value);value=Math.max(min,Math.min(max,value));
-        JSONObject data=args(key,value);
-        if(!key.equals("temperature"))try{
-            double low=key.equals("target_temp_low")?value:a.optDouble("target_temp_low"),high=key.equals("target_temp_high")?value:a.optDouble("target_temp_high");
-            if(!Double.isFinite(low)||!Double.isFinite(high)||low>=high)return;
-            data.put("target_temp_low",low).put("target_temp_high",high);
-        }catch(JSONException e){return;}
-        service(HVAC,"set_temperature",data);
-    }
-    private interface PercentAction{void run(int value);}
-    private void percentSlider(LinearLayout parent,String description,int pct,int color,TextView value,PercentAction action){
-        SeekBar bar=new SeekBar(activity);bar.setMax(100);bar.setProgress(Math.max(0,Math.min(100,pct)));
-        GradientDrawable track=popup.shape(0xff52605d,7),progress=popup.shape(color,7),thumb=popup.shape(color,16);
-        track.setSize(1,popup.dp(14));progress.setSize(1,popup.dp(14));thumb.setSize(popup.dp(32),popup.dp(32));
-        LayerDrawable layer=new LayerDrawable(new Drawable[]{track,new ClipDrawable(progress,Gravity.LEFT,ClipDrawable.HORIZONTAL)});
-        layer.setId(0,android.R.id.background);layer.setId(1,android.R.id.progress);
-        for(int i=0;i<2;i++){layer.setLayerHeight(i,popup.dp(14));layer.setLayerGravity(i,Gravity.CENTER_VERTICAL|Gravity.FILL_HORIZONTAL);}
-        bar.setProgressDrawable(layer);bar.setThumb(thumb);bar.setThumbOffset(popup.dp(16));bar.setSplitTrack(false);
-        bar.setPadding(popup.dp(18),0,popup.dp(18),0);bar.setContentDescription(description);
-        parent.addView(bar,new LinearLayout.LayoutParams(-1,popup.dp(64)));
-        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
-            public void onProgressChanged(SeekBar b,int n,boolean user){if(user)value.setText(n+"%");}
-            public void onStartTrackingTouch(SeekBar b){dragging=true;b.getParent().requestDisallowInterceptTouchEvent(true);}
-            public void onStopTrackingTouch(SeekBar b){dragging=false;b.getParent().requestDisallowInterceptTouchEvent(false);action.run(b.getProgress());if(redrawPending)ui.post(redraw);}
+        Collections.addAll(entityIds,
+                WHOLE_HOUSE_FAN,
+                SLEEP_TIMER,
+                THERMOSTAT,
+                SHADE,
+                "sensor.thermostat_temperature",
+                "sensor.thermostat_humidity",
+                "sensor.downstairs_temperature",
+                "sensor.downstairs_outside_temperature");
+
+        scrollView = new ScrollView(activity);
+        scrollView.setVerticalScrollBarEnabled(true);
+        scrollView.setScrollbarFadingEnabled(false);
+        content = popup.column();
+        scrollView.addView(content, new ScrollView.LayoutParams(-1, -2));
+        popup.body.addView(scrollView, new LinearLayout.LayoutParams(-1, -1));
+
+        popup.actions.setPadding(0, popup.dp(16), 0, 0);
+        popup.actions.addView(new View(activity), new LinearLayout.LayoutParams(0, 1, 1));
+        popup.actions.addView(popup.button("Refresh", LIGHT, TILE,
+                () -> {
+                    if (feed != null) {
+                        feed.requestSnapshot();
+                    }
+                    refresh(true);
+                }));
+        LinearLayout.LayoutParams closeParams =
+                new LinearLayout.LayoutParams(-2, -2);
+        closeParams.leftMargin = popup.dp(16);
+        popup.actions.addView(popup.button("Close", INK, TILE, popup::dismiss), closeParams);
+
+        popup.setOnDismissListener(dialog -> {
+            closed = true;
+            if (feed != null) {
+                feed.remove(listener);
+            }
+            mainHandler.removeCallbacksAndMessages(null);
+            ioExecutor.shutdown();
+            commandExecutor.shutdown();
         });
     }
-    private void fanSpeed(int speed){if(speed==0)service(WHF,"turn_off",null);else service(WHF,"turn_on",args("brightness_pct",speed));}
-    private void fan(){
-        LinearLayout t=tile(0xff253d39);boolean on="on".equals(state(WHF)),ok=available(WHF);
-        int speed=on?Math.round(attr(WHF).optInt("brightness",255)*100f/255):0;
-        LinearLayout head=popup.row();head.addView(label(ok?(on?"Running":"Off"):"Unavailable",36,FAN,true),new LinearLayout.LayoutParams(0,-2,1));
-        Button power=control(on?"Turn off":"Turn on",on?BG:FAN,on?FAN:0xff39534d,64,()->toggle(WHF));power.setEnabled(ok);head.addView(power,new LinearLayout.LayoutParams(popup.dp(160),popup.dp(64)));t.addView(head);
-        if(ok){
-            popup.gap(t,18);LinearLayout row=popup.row();row.addView(label("Fan speed",22,INK,true),new LinearLayout.LayoutParams(0,-2,1));
-            TextView value=label(speed+"%",32,FAN,true);row.addView(value);t.addView(row);
-            percentSlider(t,"Fan speed",speed,FAN,value,this::fanSpeed);
-            LinearLayout presets=popup.row();
-            for(int n:new int[]{25,50,75,100})equal(presets,control(n+"%",speed==n?BG:FAN,speed==n?FAN:0xff39534d,58,()->fanSpeed(n)),58,n==100?0:8);
-            t.addView(presets);
+
+    void open() {
+        popup.open(false, OVERLAY_HEIGHT_DP);
+
+        Window window = popup.getWindow();
+        DisplayMetrics metrics = new DisplayMetrics();
+        window.getWindowManager().getDefaultDisplay().getMetrics(metrics);
+        window.setLayout(
+                metrics.widthPixels - popup.dp(EDGE_MARGIN_DP),
+                metrics.heightPixels - popup.dp(EDGE_MARGIN_BOTTOM_DP));
+        window.getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+
+        content.addView(label("Loading devices…", 26, MUTED, false));
+        if (feed != null) {
+            feed.add(listener);
         }
-        if(available(TIMER)){
-            popup.gap(t,16);LinearLayout timerCard=tile(0xff1d312d);
-            String timer=state(TIMER);boolean active=!timer.equals("idle");
-            LinearLayout row=popup.row();row.addView(label("Sleep timer",23,INK,true),new LinearLayout.LayoutParams(0,-2,1));
-            if(active){
-                String remaining=attr(TIMER).optString("remaining","");
-                if(timer.equals("active"))try{
-                    long seconds=Math.max(0,java.time.Duration.between(java.time.Instant.now(),java.time.OffsetDateTime.parse(attr(TIMER).getString("finishes_at")).toInstant()).getSeconds());
-                    remaining=String.format(Locale.US,"%dh %02dm",seconds/3600,(seconds%3600)/60);
-                }catch(Exception ignored){}
-                row.addView(label((timer.equals("paused")?"Paused":remaining.isEmpty()?"Running":remaining+" left"),23,FAN,true));
-            }else row.addView(label("Off",22,MUTED,false));
-            timerCard.addView(row);popup.gap(timerCard,10);
-            LinearLayout times=popup.row();
-            if(active)equal(times,control("Cancel timer",FAN,0xff39534d,58,()->service(TIMER,"cancel",null)),58,0);
-            else for(int hours:new int[]{1,2,4}){
-                Button b=control(hours+" hr",FAN,0xff39534d,58,()->service(TIMER,"start",args("duration",String.format(Locale.US,"%02d:00:00",hours))));b.setEnabled(on);b.setAlpha(on?1f:.55f);equal(times,b,58,hours==4?0:8);
-            }
-            timerCard.addView(times);t.addView(timerCard);
-        }
-        addTile(t);
+        refresh(true);
     }
-    private void shade(){
-        LinearLayout t=tile(0xff443a30);boolean ok=available(SHADE);JSONObject a=attr(SHADE);int features=a.optInt("supported_features");
-        int position=a.optInt("current_position",-1);
-        LinearLayout head=popup.row();
-        head.addView(label(ok?capitalize(state(SHADE)):"Unavailable",36,LIGHT,true),new LinearLayout.LayoutParams(0,-2,1));
-        TextView percent=label(position>=0&&ok?position+"%":"",32,LIGHT,true);head.addView(percent);t.addView(head);
-        if(ok&&position>=0&&(features&4)!=0){
-            popup.gap(t,10);t.addView(label(a.optBoolean("assumed_state")?"Estimated opening":"Opening",20,MUTED,false));
-            percentSlider(t,"Shade opening",position,LIGHT,percent,n->service(SHADE,"set_cover_position",args("position",n)));
+
+    private TextView label(String text, int sizeSp, int color, boolean bold) {
+        TextView view = popup.label(text, sizeSp, color, bold);
+        try {
+            view.setTypeface(Typeface.createFromFile(
+                    "/system/fonts/Amazon-Ember-" + (bold ? "Medium" : "Regular") + ".ttf"));
+        } catch (Exception missing) {
+            // The popup already applies a sans-serif fallback.
         }
-        LinearLayout row=popup.row();popup.gap(t,12);
-        String[] names={"Open","Stop","Close"},actions={"open_cover","stop_cover","close_cover"};int[] masks={1,8,2};
-        for(int i=0;i<names.length;i++){final String action=actions[i];if((features&masks[i])==0)continue;
-            Button b=control(names[i],LIGHT,0xff5a4938,76,()->service(SHADE,action,null));b.setEnabled(ok);equal(row,b,76,i==names.length-1?0:10);
+        return view;
+    }
+
+    private void liveChanged(Set<String> changed, boolean reset) {
+        if (closed) {
+            return;
         }
-        t.addView(row);addTile(t);
+        if (feed == null || !feed.isReady()) {
+            refresh(false);
+            return;
+        }
+        if (reset || !Collections.disjoint(entityIds, changed)) {
+            copyLiveStates();
+            mainHandler.removeCallbacks(redraw);
+            mainHandler.post(redraw);
+        }
+    }
+
+    private void copyLiveStates() {
+        states.clear();
+        for (String id : entityIds) {
+            JSONObject value = feed.get(id);
+            if (value != null) {
+                states.put(id, value);
+            }
+        }
+    }
+
+    private void refresh(boolean force) {
+        if (closed) {
+            return;
+        }
+        mainHandler.removeCallbacks(poll);
+
+        if (feed != null && feed.isReady()) {
+            copyLiveStates();
+            if (force) {
+                signature = "";
+            }
+            redraw.run();
+            mainHandler.postDelayed(poll, LIVE_REFRESH_MS);
+            return;
+        }
+
+        if (busy || dragging) {
+            mainHandler.postDelayed(poll, BUSY_RETRY_MS);
+            return;
+        }
+
+        busy = true;
+        ioExecutor.execute(() -> {
+            try {
+                JSONArray array = client.getStates();
+                Map<String, JSONObject> result = new HashMap<>();
+                for (int i = 0; i < array.length(); i++) {
+                    JSONObject state = array.optJSONObject(i);
+                    if (state != null && entityIds.contains(state.optString("entity_id"))) {
+                        result.put(state.optString("entity_id"), state);
+                    }
+                }
+                mainHandler.post(() -> {
+                    if (closed) {
+                        return;
+                    }
+                    busy = false;
+                    if (feed != null && feed.isReady()) {
+                        copyLiveStates();
+                    } else {
+                        states.clear();
+                        states.putAll(result);
+                    }
+                    if (force) {
+                        signature = "";
+                    }
+                    redraw.run();
+                    mainHandler.postDelayed(poll, REST_REFRESH_MS);
+                });
+            } catch (Exception e) {
+                mainHandler.post(() -> {
+                    if (closed) {
+                        return;
+                    }
+                    busy = false;
+                    if (feed != null && feed.isReady()) {
+                        copyLiveStates();
+                    } else {
+                        states.clear();
+                    }
+                    signature = "";
+                    redraw.run();
+                    mainHandler.postDelayed(poll, REST_REFRESH_MS);
+                });
+            }
+        });
+    }
+
+    private final Runnable poll = () -> refresh(false);
+
+    private String fingerprint() {
+        StringBuilder builder = new StringBuilder();
+        for (String id : new TreeSet<>(entityIds)) {
+            JSONObject state = states.get(id);
+            if (state != null) {
+                builder.append(id)
+                        .append(state.optString("state"))
+                        .append(state.optJSONObject("attributes"));
+            }
+        }
+        if ("active".equals(stateOf(SLEEP_TIMER))) {
+            builder.append(System.currentTimeMillis() / 60000);
+        }
+        return builder.toString();
+    }
+
+    private JSONObject attributes(String id) {
+        JSONObject state = states.get(id);
+        JSONObject attributes = state == null ? null : state.optJSONObject("attributes");
+        return attributes == null ? new JSONObject() : attributes;
+    }
+
+    private String stateOf(String id) {
+        JSONObject state = states.get(id);
+        return state == null ? "unavailable" : state.optString("state", "unknown");
+    }
+
+    private boolean isAvailable(String id) {
+        String state = stateOf(id);
+        return !"unavailable".equals(state) && !"unknown".equals(state);
+    }
+
+    private static String domainOf(String id) {
+        return id.substring(0, id.indexOf('.'));
+    }
+
+    private void callService(String id, String action, JSONObject extras) {
+        if (closed || !isAvailable(id)) {
+            return;
+        }
+        // Queue different devices immediately, but ignore repeat taps on a device until Home
+        // Assistant has acknowledged the previous request.
+        if (!pendingActions.add(id)) {
+            return;
+        }
+        try {
+            JSONObject data = extras == null ? new JSONObject() : extras;
+            data.put("entity_id", id);
+            commandExecutor.execute(() -> {
+                String error = null;
+                try {
+                    client.call(domainOf(id), action, data, false);
+                } catch (Exception e) {
+                    error = "Action failed";
+                }
+                final String message = error;
+                mainHandler.post(() -> {
+                    pendingActions.remove(id);
+                    if (closed) {
+                        return;
+                    }
+                    if (message != null) {
+                        Toast.makeText(activity, message, Toast.LENGTH_SHORT).show();
+                    }
+                    if (feed == null || !feed.isReady()) {
+                        refresh(true);
+                    } else {
+                        copyLiveStates();
+                        redraw.run();
+                    }
+                });
+            });
+        } catch (JSONException e) {
+            pendingActions.remove(id);
+        }
+    }
+
+    private static JSONObject arguments(String key, Object value) {
+        JSONObject data = new JSONObject();
+        try {
+            data.put(key, value);
+        } catch (JSONException invalid) {
+            // Values passed here are always JSON-compatible.
+        }
+        return data;
+    }
+
+    private void toggle(String id) {
+        callService(id, "on".equals(stateOf(id)) ? "turn_off" : "turn_on", null);
+    }
+
+    private void render() {
+        int scrollY = scrollView.getScrollY();
+        content.removeAllViews();
+
+        section("Indoor lights", LIGHT);
+        renderLights(INSIDE_LIGHTS);
+        section("Outdoor lights", LIGHT);
+        renderLights(OUTSIDE_LIGHTS);
+        section("Whole house fan", FAN);
+        renderFan();
+        section("Shade", LIGHT);
+        renderShade();
+        section("Climate", CLIMATE);
+        renderClimate();
+
+        scrollView.post(() -> scrollView.scrollTo(0, scrollY));
+    }
+
+    private void section(String title, int color) {
+        popup.gap(content, SECTION_GAP_DP);
+        content.addView(label(title, 26, color, true));
+        popup.gap(content, TILE_GAP_DP);
+    }
+
+    private LinearLayout tile(int background) {
+        LinearLayout tile = popup.column();
+        tile.setPadding(popup.dp(18), popup.dp(16), popup.dp(18), popup.dp(16));
+        tile.setBackground(popup.shape(background, 16));
+        return tile;
+    }
+
+    private void fill(LinearLayout row, View view, int marginDp) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -1, 1);
+        params.rightMargin = popup.dp(marginDp);
+        row.addView(view, params);
+    }
+
+    private void addTile(LinearLayout row) {
+        content.addView(row, new LinearLayout.LayoutParams(-1, -2));
+        popup.gap(content, TILE_GAP_DP);
+    }
+
+    private static String capitalize(String value) {
+        if (value.isEmpty()) {
+            return value;
+        }
+        return Character.toUpperCase(value.charAt(0)) + value.substring(1).replace('_', ' ');
+    }
+
+    private boolean isDimmable(String id) {
+        if (!id.startsWith("light.")) {
+            return false;
+        }
+        JSONObject attributes = attributes(id);
+        JSONArray modes = attributes.optJSONArray("supported_color_modes");
+        if (modes != null) {
+            for (int i = 0; i < modes.length(); i++) {
+                if (DIMMABLE_COLOR_MODES.contains(modes.optString(i))) {
+                    return true;
+                }
+            }
+        }
+        return !attributes.isNull("brightness");
+    }
+
+    private void renderLights(String[][] group) {
+        int columns = activity.getResources().getConfiguration().orientation
+                == Configuration.ORIENTATION_LANDSCAPE ? 4 : 3;
+
+        for (int index = 0; index < group.length; index += columns) {
+            LinearLayout row = popup.row();
+            row.setGravity(Gravity.TOP);
+            for (int column = 0; column < columns; column++) {
+                int position = index + column;
+                if (position >= group.length) {
+                    fill(row, new View(activity), column == columns - 1 ? 0 : 10);
+                    continue;
+                }
+                fill(row, buildLightTile(group[position][0], group[position][1]),
+                        column == columns - 1 ? 0 : 10);
+            }
+            addTile(row);
+        }
+    }
+
+    private LinearLayout buildLightTile(String id, String name) {
+        boolean on = "on".equals(stateOf(id));
+        boolean available = isAvailable(id);
+        boolean dimmable = isDimmable(id);
+        int percent = on
+                ? Math.max(1, Math.round(attributes(id).optInt("brightness", 255) * 100f / 255))
+                : 0;
+
+        LinearLayout card = tile(on ? LIGHT_ON_TILE : TILE);
+        LinearLayout power = popup.column();
+        LinearLayout top = popup.row();
+
+        ImageView icon = new ImageView(activity);
+        int iconResource = activity.getResources()
+                .getIdentifier("ic_lightbulb", "drawable", activity.getPackageName());
+        if (iconResource != 0) {
+            icon.setImageResource(iconResource);
+            icon.setColorFilter(on ? LIGHT : MUTED);
+        }
+        top.addView(icon, new LinearLayout.LayoutParams(popup.dp(36), popup.dp(36)));
+
+        TextView nameView = label(name, 22, INK, true);
+        nameView.setMaxLines(2);
+        LinearLayout.LayoutParams nameParams = new LinearLayout.LayoutParams(0, -2, 1);
+        nameParams.leftMargin = popup.dp(12);
+        top.addView(nameView, nameParams);
+        power.addView(top);
+        popup.gap(power, 8);
+
+        LinearLayout statusRow = popup.row();
+        statusRow.addView(
+                label(available ? (on ? "On" : "Off") : "Unavailable",
+                        19, on ? LIGHT : MUTED, false),
+                new LinearLayout.LayoutParams(0, -2, 1));
+        boolean showPercent = available && dimmable;
+        boolean percentKnown = !attributes(id).isNull("brightness");
+        String percentText = showPercent
+                ? (on && !percentKnown ? "—" : percent + "%")
+                : "";
+        TextView value = label(percentText, 21, on ? LIGHT : MUTED, true);
+        statusRow.addView(value);
+        power.addView(statusRow);
+        card.addView(power, new LinearLayout.LayoutParams(-1, -2));
+
+        String description = name + ", " + (available ? (on ? "on" : "off") : "unavailable");
+        power.setMinimumHeight(popup.dp(68));
+        power.setContentDescription(description);
+        power.setBackground(new RippleDrawable(
+                ColorStateList.valueOf(RIPPLE),
+                popup.shape(Color.TRANSPARENT, 12),
+                popup.shape(Color.WHITE, 12)));
+        power.setEnabled(available);
+        power.setOnClickListener(view -> toggle(id));
+        card.setMinimumHeight(popup.dp(118));
+
+        if (dimmable) {
+            popup.gap(card, 4);
+            if (available) {
+                percentSlider(card, name + " brightness", percent, LIGHT, value, level -> {
+                    if (level == percent) {
+                        return;
+                    }
+                    if (level == 0) {
+                        callService(id, "turn_off", null);
+                    } else {
+                        callService(id, "turn_on", arguments("brightness_pct", level));
+                    }
+                });
+            } else {
+                card.addView(label("Brightness unavailable", 18, MUTED, false));
+            }
+        } else {
+            card.setContentDescription(description);
+            card.setBackground(new RippleDrawable(
+                    ColorStateList.valueOf(RIPPLE),
+                    popup.shape(on ? LIGHT_ON_TILE : TILE, 16),
+                    popup.shape(Color.WHITE, 16)));
+            card.setEnabled(available);
+            card.setOnClickListener(view -> toggle(id));
+        }
+        return card;
+    }
+
+    private void renderClimate() {
+        LinearLayout card = tile(CLIMATE_TILE);
+        JSONObject attributes = attributes(THERMOSTAT);
+        if (!isAvailable(THERMOSTAT)) {
+            card.addView(label("Thermostat unavailable", 24, MUTED, false));
+            addTile(card);
+            return;
+        }
+
+        String mode = stateOf(THERMOSTAT);
+        String action = attributes.optString("hvac_action", mode);
+        int activeColor = "heat".equals(mode) ? HEAT : COOL;
+        double current = attributes.optDouble("current_temperature", Double.NaN);
+        double humidity = attributes.optDouble("current_humidity", Double.NaN);
+        if (!Double.isFinite(humidity)) {
+            try {
+                humidity = Double.parseDouble(stateOf("sensor.thermostat_humidity"));
+            } catch (Exception unknown) {
+                // Keep humidity unavailable.
+            }
+        }
+
+        LinearLayout header = popup.row();
+        LinearLayout reading = popup.column();
+        LinearLayout details = popup.column();
+        reading.addView(label("Indoor temperature", 20, MUTED, false));
+        reading.addView(label(degrees(current), 64, INK, true));
+        header.addView(reading, new LinearLayout.LayoutParams(0, -2, 1));
+
+        TextView hvac = label(
+                capitalize(action),
+                29,
+                "heating".equals(action) ? HEAT : "cooling".equals(action) ? COOL : MUTED,
+                true);
+        hvac.setGravity(Gravity.END);
+        details.addView(hvac);
+        if (Double.isFinite(humidity)) {
+            TextView humidityView = label(
+                    String.format(Locale.US, "%.0f%% humidity", humidity), 22, MUTED, false);
+            humidityView.setGravity(Gravity.END);
+            details.addView(humidityView);
+        }
+        header.addView(details);
+        card.addView(header);
+        popup.gap(card, 16);
+
+        JSONArray modes = attributes.optJSONArray("hvac_modes");
+        LinearLayout modeButtons = popup.row();
+        if (modes != null) {
+            for (int i = 0; i < modes.length(); i++) {
+                String candidate = modes.optString(i);
+                boolean selected = candidate.equals(mode);
+                int selectedColor = "heat".equals(candidate)
+                        ? HEAT
+                        : "off".equals(candidate) ? MUTED : COOL;
+                equal(modeButtons, control(
+                                modeLabel(candidate),
+                                selected ? BACKGROUND : INK,
+                                selected ? selectedColor : CONTROL_BACKGROUND,
+                                62,
+                                () -> callService(
+                                        THERMOSTAT,
+                                        "set_hvac_mode",
+                                        arguments("hvac_mode", candidate))),
+                        62,
+                        i == modes.length() - 1 ? 0 : 8);
+            }
+        }
+        card.addView(modeButtons);
+
+        if ("heat_cool".equals(mode)) {
+            double low = attributes.optDouble("target_temp_low", Double.NaN);
+            double high = attributes.optDouble("target_temp_high", Double.NaN);
+            if (Double.isFinite(low) && Double.isFinite(high)) {
+                popup.gap(card, 14);
+                LinearLayout range = popup.row();
+                equal(range, buildTargetPanel(attributes, "target_temp_low", "Heat to", low, HEAT),
+                        -2, 10);
+                equal(range, buildTargetPanel(attributes, "target_temp_high", "Cool to", high, COOL),
+                        -2, 0);
+                card.addView(range);
+            }
+        } else if (!"off".equals(mode)) {
+            double target = attributes.optDouble("temperature", Double.NaN);
+            if (Double.isFinite(target)) {
+                popup.gap(card, 14);
+                String label = "heat".equals(mode)
+                        ? "Heat to"
+                        : "cool".equals(mode) ? "Cool to" : "Target";
+                card.addView(buildTargetPanel(
+                        attributes, "temperature", label, target, activeColor));
+            }
+        }
+        addTile(card);
+    }
+
+    private LinearLayout buildTargetPanel(
+            JSONObject attributes, String key, String name, double value, int color) {
+        double step = attributes.optDouble("target_temp_step", 1);
+        final double delta = Double.isFinite(step) && step > 0 ? step : 1;
+
+        LinearLayout panel = tile(TARGET_PANEL);
+        panel.setPadding(popup.dp(12), popup.dp(12), popup.dp(12), popup.dp(12));
+
+        TextView title = label(name, 22, color, true);
+        title.setGravity(Gravity.CENTER);
+        panel.addView(title);
+        popup.gap(panel, 8);
+
+        LinearLayout row = popup.row();
+        Button minus = control("−", color, CONTROL_BACKGROUND, 64,
+                () -> setTarget(attributes, key, value - delta));
+        Button plus = control("+", color, CONTROL_BACKGROUND, 64,
+                () -> setTarget(attributes, key, value + delta));
+        minus.setTextSize(34);
+        plus.setTextSize(34);
+        minus.setContentDescription("Decrease " + name.toLowerCase(Locale.US));
+        plus.setContentDescription("Increase " + name.toLowerCase(Locale.US));
+
+        double minimum = attributes.optDouble("min_temp", Double.NEGATIVE_INFINITY);
+        double maximum = attributes.optDouble("max_temp", Double.POSITIVE_INFINITY);
+        double low = attributes.optDouble("target_temp_low", Double.NEGATIVE_INFINITY);
+        double high = attributes.optDouble("target_temp_high", Double.POSITIVE_INFINITY);
+        minus.setEnabled(value - delta >= minimum
+                && (!"target_temp_high".equals(key) || value - delta > low));
+        plus.setEnabled(value + delta <= maximum
+                && (!"target_temp_low".equals(key) || value + delta < high));
+
+        row.addView(minus, new LinearLayout.LayoutParams(popup.dp(66), popup.dp(64)));
+        TextView number = label(degrees(value), 42, color, true);
+        number.setGravity(Gravity.CENTER);
+        row.addView(number, new LinearLayout.LayoutParams(0, -2, 1));
+        row.addView(plus, new LinearLayout.LayoutParams(popup.dp(66), popup.dp(64)));
+        panel.addView(row);
+        return panel;
+    }
+
+    private void setTarget(JSONObject attributes, String key, double value) {
+        double minimum = attributes.optDouble("min_temp", value);
+        double maximum = attributes.optDouble("max_temp", value);
+        value = Math.max(minimum, Math.min(maximum, value));
+
+        JSONObject data = arguments(key, value);
+        if (!"temperature".equals(key)) {
+            try {
+                double low = "target_temp_low".equals(key)
+                        ? value
+                        : attributes.optDouble("target_temp_low");
+                double high = "target_temp_high".equals(key)
+                        ? value
+                        : attributes.optDouble("target_temp_high");
+                if (!Double.isFinite(low) || !Double.isFinite(high) || low >= high) {
+                    return;
+                }
+                data.put("target_temp_low", low).put("target_temp_high", high);
+            } catch (JSONException invalid) {
+                return;
+            }
+        }
+        callService(THERMOSTAT, "set_temperature", data);
+    }
+
+    private void renderFan() {
+        LinearLayout card = tile(FAN_TILE);
+        boolean on = "on".equals(stateOf(WHOLE_HOUSE_FAN));
+        boolean available = isAvailable(WHOLE_HOUSE_FAN);
+        int speed = on
+                ? Math.round(attributes(WHOLE_HOUSE_FAN).optInt("brightness", 255) * 100f / 255)
+                : 0;
+
+        LinearLayout head = popup.row();
+        head.addView(label(available ? (on ? "Running" : "Off") : "Unavailable",
+                        36, FAN, true),
+                new LinearLayout.LayoutParams(0, -2, 1));
+        Button power = control(on ? "Turn off" : "Turn on",
+                on ? BACKGROUND : FAN,
+                on ? FAN : FAN_CONTROL_BACKGROUND,
+                64,
+                () -> toggle(WHOLE_HOUSE_FAN));
+        power.setEnabled(available);
+        head.addView(power, new LinearLayout.LayoutParams(popup.dp(160), popup.dp(64)));
+        card.addView(head);
+
+        if (available) {
+            popup.gap(card, 18);
+            LinearLayout speedRow = popup.row();
+            speedRow.addView(label("Fan speed", 22, INK, true),
+                    new LinearLayout.LayoutParams(0, -2, 1));
+            TextView value = label(speed + "%", 32, FAN, true);
+            speedRow.addView(value);
+            card.addView(speedRow);
+
+            percentSlider(card, "Fan speed", speed, FAN, value, this::setFanSpeed);
+
+            LinearLayout presets = popup.row();
+            for (int preset : new int[]{25, 50, 75, 100}) {
+                equal(presets, control(
+                                preset + "%",
+                                speed == preset ? BACKGROUND : FAN,
+                                speed == preset ? FAN : FAN_CONTROL_BACKGROUND,
+                                58,
+                                () -> setFanSpeed(preset)),
+                        58,
+                        preset == 100 ? 0 : 8);
+            }
+            card.addView(presets);
+        }
+
+        if (isAvailable(SLEEP_TIMER)) {
+            popup.gap(card, 16);
+            card.addView(buildSleepTimer(on));
+        }
+        addTile(card);
+    }
+
+    private LinearLayout buildSleepTimer(boolean fanRunning) {
+        LinearLayout card = tile(TIMER_PANEL);
+        String timer = stateOf(SLEEP_TIMER);
+        boolean active = !"idle".equals(timer);
+
+        LinearLayout row = popup.row();
+        row.addView(label("Sleep timer", 23, INK, true),
+                new LinearLayout.LayoutParams(0, -2, 1));
+        if (active) {
+            String remaining = attributes(SLEEP_TIMER).optString("remaining", "");
+            if ("active".equals(timer)) {
+                try {
+                    long seconds = Math.max(0, Duration.between(
+                            Instant.now(),
+                            OffsetDateTime.parse(
+                                    attributes(SLEEP_TIMER).getString("finishes_at"))
+                                    .toInstant()).getSeconds());
+                    remaining = String.format(
+                            Locale.US, "%dh %02dm", seconds / 3600, (seconds % 3600) / 60);
+                } catch (Exception unavailable) {
+                    // Keep the reported remaining text.
+                }
+            }
+            String text = "paused".equals(timer)
+                    ? "Paused"
+                    : remaining.isEmpty() ? "Running" : remaining + " left";
+            row.addView(label(text, 23, FAN, true));
+        } else {
+            row.addView(label("Off", 22, MUTED, false));
+        }
+        card.addView(row);
+        popup.gap(card, 10);
+
+        LinearLayout actions = popup.row();
+        if (active) {
+            equal(actions, control("Cancel timer", FAN, FAN_CONTROL_BACKGROUND, 58,
+                    () -> callService(SLEEP_TIMER, "cancel", null)), 58, 0);
+        } else {
+            for (int hours : new int[]{1, 2, 4}) {
+                Button button = control(
+                        hours + " hr",
+                        FAN,
+                        FAN_CONTROL_BACKGROUND,
+                        58,
+                        () -> callService(
+                                SLEEP_TIMER,
+                                "start",
+                                arguments("duration",
+                                        String.format(Locale.US, "%02d:00:00", hours))));
+                button.setEnabled(fanRunning);
+                button.setAlpha(fanRunning ? 1f : 0.55f);
+                equal(actions, button, 58, hours == 4 ? 0 : 8);
+            }
+        }
+        card.addView(actions);
+        return card;
+    }
+
+    private void setFanSpeed(int speed) {
+        if (speed == 0) {
+            callService(WHOLE_HOUSE_FAN, "turn_off", null);
+        } else {
+            callService(WHOLE_HOUSE_FAN, "turn_on", arguments("brightness_pct", speed));
+        }
+    }
+
+    private void renderShade() {
+        LinearLayout card = tile(SHADE_TILE);
+        boolean available = isAvailable(SHADE);
+        JSONObject attributes = attributes(SHADE);
+        int features = attributes.optInt("supported_features");
+        int position = attributes.optInt("current_position", -1);
+
+        LinearLayout head = popup.row();
+        head.addView(label(available ? capitalize(stateOf(SHADE)) : "Unavailable",
+                        36, LIGHT, true),
+                new LinearLayout.LayoutParams(0, -2, 1));
+        TextView percent = label(available && position >= 0 ? position + "%" : "",
+                32, LIGHT, true);
+        head.addView(percent);
+        card.addView(head);
+
+        if (available && position >= 0 && (features & 4) != 0) {
+            popup.gap(card, 10);
+            card.addView(label(
+                    attributes.optBoolean("assumed_state") ? "Estimated opening" : "Opening",
+                    20,
+                    MUTED,
+                    false));
+            percentSlider(card, "Shade opening", position, LIGHT, percent,
+                    level -> callService(
+                            SHADE, "set_cover_position", arguments("position", level)));
+        }
+
+        popup.gap(card, 12);
+        LinearLayout row = popup.row();
+        String[] names = {"Open", "Stop", "Close"};
+        String[] actions = {"open_cover", "stop_cover", "close_cover"};
+        int[] featureMasks = {1, 8, 2};
+        for (int i = 0; i < names.length; i++) {
+            if ((features & featureMasks[i]) == 0) {
+                continue;
+            }
+            String action = actions[i];
+            Button button = control(names[i], LIGHT, LIGHT_ON_TILE, 76,
+                    () -> callService(SHADE, action, null));
+            button.setEnabled(available);
+            equal(row, button, 76, i == names.length - 1 ? 0 : 10);
+        }
+        card.addView(row);
+        addTile(card);
+    }
+
+    private void percentSlider(
+            LinearLayout parent,
+            String description,
+            int percent,
+            int color,
+            TextView value,
+            PercentAction action) {
+        SeekBar bar = new SeekBar(activity);
+        bar.setMax(100);
+        bar.setProgress(Math.max(0, Math.min(100, percent)));
+
+        GradientDrawable track = popup.shape(SLIDER_TRACK, 7);
+        GradientDrawable progress = popup.shape(color, 7);
+        GradientDrawable thumb = popup.shape(color, 16);
+        track.setSize(1, popup.dp(14));
+        progress.setSize(1, popup.dp(14));
+        thumb.setSize(popup.dp(32), popup.dp(32));
+
+        LayerDrawable layers = new LayerDrawable(new Drawable[]{
+                track, new ClipDrawable(progress, Gravity.LEFT, ClipDrawable.HORIZONTAL)
+        });
+        layers.setId(0, android.R.id.background);
+        layers.setId(1, android.R.id.progress);
+        for (int i = 0; i < 2; i++) {
+            layers.setLayerHeight(i, popup.dp(14));
+            layers.setLayerGravity(i, Gravity.CENTER_VERTICAL | Gravity.FILL_HORIZONTAL);
+        }
+        bar.setProgressDrawable(layers);
+        bar.setThumb(thumb);
+        bar.setThumbOffset(popup.dp(16));
+        bar.setSplitTrack(false);
+        bar.setPadding(popup.dp(18), 0, popup.dp(18), 0);
+        bar.setContentDescription(description);
+        parent.addView(bar, new LinearLayout.LayoutParams(-1, popup.dp(64)));
+
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progressValue, boolean fromUser) {
+                if (fromUser) {
+                    value.setText(progressValue + "%");
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+                dragging = true;
+                seekBar.getParent().requestDisallowInterceptTouchEvent(true);
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                dragging = false;
+                seekBar.getParent().requestDisallowInterceptTouchEvent(false);
+                action.run(seekBar.getProgress());
+                if (redrawPending) {
+                    mainHandler.post(redraw);
+                }
+            }
+        });
+    }
+
+    private interface PercentAction {
+        void run(int value);
+    }
+
+    private Button control(String name, int foreground, int background, int heightDp,
+            Runnable action) {
+        Button button = popup.button(name, foreground, background, action);
+        button.setTextSize(23);
+        button.setMinHeight(popup.dp(heightDp));
+        button.setMinimumHeight(popup.dp(heightDp));
+        button.setPadding(popup.dp(8), 0, popup.dp(8), 0);
+        try {
+            button.setTypeface(
+                    Typeface.createFromFile("/system/fonts/Amazon-Ember-Medium.ttf"));
+        } catch (Exception missing) {
+            // Keep the button's default typeface.
+        }
+        return button;
+    }
+
+    private void equal(LinearLayout row, View view, int heightDp, int marginDp) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                0, heightDp < 0 ? heightDp : popup.dp(heightDp), 1);
+        params.rightMargin = popup.dp(marginDp);
+        row.addView(view, params);
+    }
+
+    private static String degrees(double value) {
+        if (!Double.isFinite(value)) {
+            return "—";
+        }
+        return String.format(
+                Locale.US, value == Math.rint(value) ? "%.0f°" : "%.1f°", value);
+    }
+
+    private static String modeLabel(String mode) {
+        return "heat_cool".equals(mode) ? "Auto" : capitalize(mode);
     }
 }
