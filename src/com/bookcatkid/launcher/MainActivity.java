@@ -9,6 +9,7 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.RippleDrawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -63,8 +64,9 @@ public class MainActivity extends Activity implements DashboardView.Actions {
     private static final long TODO_REFRESH_INTERVAL_MS = 15000;
     private static final long CALENDAR_REFRESH_INTERVAL_MS = 300000;
     private static final long ARTWORK_RETRY_DELAY_MS = 5000;
-    private static final long FIRE_TV_REQUEST_TIMEOUT_MS = 3500;
     private static final int SNAPSHOT_LIMIT_BYTES = 4_000_000;
+    private static final String FIRE_TV_HOME_URI =
+            "amzn://com.amazon.tv.launcher/menuNavigation?locationID=HOME";
     private static final String DEFAULT_TODO = "todo.grocery_list";
     private static final String DEFAULT_CALENDAR = "calendar.family";
     private static final String DEFAULT_WEATHER = "weather.home";
@@ -779,28 +781,9 @@ public class MainActivity extends Activity implements DashboardView.Actions {
     public void onFireTv() {
         try {
             getApplicationContext().startActivity(
-                    new Intent("com.amazon.tv.launcher.SYSTEM_UI_INTENT")
+                    new Intent(Intent.ACTION_VIEW, Uri.parse(FIRE_TV_HOME_URI))
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-            return;
-        } catch (SecurityException restricted) {
-            // The owner-managed device bridge accepts only this single fixed action.
         } catch (Exception unavailable) {
-            toast("Fire TV is unavailable");
-            return;
-        }
-
-        File request = new File(getFilesDir(), "firetv-launch-request");
-        try {
-            if (!request.exists() && !request.createNewFile()) {
-                throw new IOException("Could not request Fire TV");
-            }
-            mainHandler.postDelayed(() -> {
-                if (request.exists()) {
-                    request.delete();
-                    toast("Fire TV launch helper is unavailable");
-                }
-            }, FIRE_TV_REQUEST_TIMEOUT_MS);
-        } catch (IOException e) {
             toast("Fire TV is unavailable");
         }
     }

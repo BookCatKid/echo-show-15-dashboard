@@ -50,10 +50,6 @@ To start it at boot, install `tools/home-redirect.rc` as
 `/odm/etc/init/home-redirect.rc`. That one-time write needs root. The service
 then runs as shell on every boot.
 
-`tools/firetv-launch-bridge.sh` is a fixed-action bridge that launches the
-Fire TV interface on request. It executes only the fixed action and never
-request contents.
-
 ## Vendored libraries
 
 `lib/` holds Java-WebSocket 1.6.0 and SLF4J 2.0.16 (MIT), with SHA-1 sidecars.
