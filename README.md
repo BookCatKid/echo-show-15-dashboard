@@ -2,7 +2,7 @@
 
 Native Android home screen for the Amazon Echo Show 15 (1st gen). It draws a
 Home Assistant dashboard, subscribes to the Home Assistant WebSocket API, and
-shows calendar and smart-home widgets.
+shows calendar, weather and smart-home widgets.
 
 This is an example custom dashboard you can run on a Show rooted with
 [hoya-runtime-root](https://github.com/BookCatKid/hoya-runtime-root).

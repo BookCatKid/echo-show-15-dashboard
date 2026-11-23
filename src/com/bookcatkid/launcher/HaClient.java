@@ -16,6 +16,7 @@ import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -30,7 +31,7 @@ import java.util.Set;
 public final class HaClient {
 
     private static final int CONNECT_TIMEOUT_MS = 5000;
-    private static final int READ_TIMEOUT_MS = 10000;
+    private static final int READ_TIMEOUT_MS = 15000;
     private static final int JSON_LIMIT_BYTES = 8 * 1024 * 1024;
     private static final int IMAGE_LIMIT_BYTES = 12 * 1024 * 1024;
     private static final int MAX_ARTWORK_DIMENSION = 2048;
@@ -124,6 +125,19 @@ public final class HaClient {
                 .getJSONObject("service_response")
                 .getJSONObject(todo)
                 .getJSONArray("items");
+    }
+
+    /**
+     * Events in a Home Assistant calendar between two dates, inclusive start and exclusive end.
+     * Dates are ISO local dates, for example 2026-11-01.
+     */
+    public JSONArray getCalendarEvents(String calendar, String start, String end)
+            throws IOException, JSONException {
+        requireEntity(calendar, "calendar");
+        String query = "start=" + URLEncoder.encode(start, StandardCharsets.UTF_8.name())
+                + "&end=" + URLEncoder.encode(end, StandardCharsets.UTF_8.name());
+        return new JSONArray(jsonRequest(
+                "GET", "api/calendars/" + calendar + "?" + query, null));
     }
 
     /**

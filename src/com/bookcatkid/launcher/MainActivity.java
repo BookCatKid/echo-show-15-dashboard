@@ -23,6 +23,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -32,8 +33,16 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.DateTimeException;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
@@ -43,8 +52,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 /**
- * Home screen activity. Owns the Home Assistant connection, merges the Echo data snapshot and
- * the Home Assistant state into one dashboard snapshot, and forwards user actions back to Home
+ * Home screen activity. Owns the Home Assistant connection, combines Home Assistant state,
+ * calendar and weather into one dashboard snapshot, and forwards user actions back to Home
  * Assistant.
  */
 public class MainActivity extends Activity implements DashboardView.Actions {
@@ -52,10 +61,13 @@ public class MainActivity extends Activity implements DashboardView.Actions {
     private static final long CLOCK_TICK_MS = 3000;
     private static final long SONOS_DISCOVERY_INTERVAL_MS = 300000;
     private static final long TODO_REFRESH_INTERVAL_MS = 15000;
+    private static final long CALENDAR_REFRESH_INTERVAL_MS = 300000;
     private static final long ARTWORK_RETRY_DELAY_MS = 5000;
     private static final long FIRE_TV_REQUEST_TIMEOUT_MS = 3500;
     private static final int SNAPSHOT_LIMIT_BYTES = 4_000_000;
     private static final String DEFAULT_TODO = "todo.grocery_list";
+    private static final String DEFAULT_CALENDAR = "calendar.family";
+    private static final String DEFAULT_WEATHER = "weather.home";
 
     private DashboardView dashboard;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -82,11 +94,14 @@ public class MainActivity extends Activity implements DashboardView.Actions {
 
     private String selected = "";
     private String todo = DEFAULT_TODO;
+    private String calendar = DEFAULT_CALENDAR;
+    private String weather = DEFAULT_WEATHER;
 
     private boolean active;
     private boolean busy;
     private volatile long generation;
     private long lastTodo;
+    private long lastCalendar;
     private long lastDiscovery;
 
     private interface Job {
@@ -221,6 +236,8 @@ public class MainActivity extends Activity implements DashboardView.Actions {
         }
         selected = config.optString("player", selected);
         todo = config.optString("todo", DEFAULT_TODO);
+        calendar = config.optString("calendar", DEFAULT_CALENDAR);
+        weather = config.optString("weather", DEFAULT_WEATHER);
 
         String base = config.optString("url");
         String token = config.optString("token");
@@ -236,6 +253,7 @@ public class MainActivity extends Activity implements DashboardView.Actions {
         sonosIds = null;
         lastDiscovery = 0;
         lastTodo = 0;
+        lastCalendar = 0;
         if (client != null) {
             feed = client.stateFeed();
             feed.add(this::liveChanged);
@@ -247,7 +265,10 @@ public class MainActivity extends Activity implements DashboardView.Actions {
 
     private void saveConfig() {
         try {
-            config.put("player", selected).put("todo", todo);
+            config.put("player", selected)
+                    .put("todo", todo)
+                    .put("calendar", calendar)
+                    .put("weather", weather);
             try (FileOutputStream output = openFileOutput("ha.json", MODE_PRIVATE)) {
                 output.write(config.toString().getBytes(StandardCharsets.UTF_8));
             }
@@ -374,25 +395,22 @@ public class MainActivity extends Activity implements DashboardView.Actions {
         final HaClient currentClient = client;
         final boolean live = feed != null && feed.isReady();
         final String todoId = todo;
+        final String calendarId = calendar;
         final long requestGeneration = generation;
         final long discoveryAtStart = lastDiscovery;
         final long todoAtStart = lastTodo;
+        final long calendarAtStart = lastCalendar;
         final JSONArray cachedIds = sonosIds;
 
         ioExecutor.execute(() -> {
-            JSONObject echoData = null;
             JSONArray discovered = cachedIds;
             JSONArray fallbackStates = null;
             JSONArray nextItems = null;
+            JSONObject nextCalendar = null;
             String error = null;
             long discoveryTime = discoveryAtStart;
             long todoTime = todoAtStart;
-
-            try {
-                echoData = new JSONObject(read(new File(getFilesDir(), "echo-data.json")));
-            } catch (Exception missingEchoData) {
-                // The Echo bridge may not have written a snapshot yet.
-            }
+            long calendarTime = calendarAtStart;
 
             try {
                 if (currentClient != null) {
@@ -408,6 +426,22 @@ public class MainActivity extends Activity implements DashboardView.Actions {
                         nextItems = currentClient.getItems(todoId);
                         todoTime = now;
                     }
+                    if (now - calendarAtStart > CALENDAR_REFRESH_INTERVAL_MS) {
+                        try {
+                            LocalDate rangeStart = LocalDate.now().withDayOfMonth(1);
+                            LocalDate rangeEnd = rangeStart.plusMonths(2);
+                            nextCalendar = normalizeCalendar(
+                                    currentClient.getCalendarEvents(
+                                            calendarId,
+                                            rangeStart.toString(),
+                                            rangeEnd.toString()),
+                                    now);
+                            calendarTime = now;
+                        } catch (Exception calendarUnavailable) {
+                            // Keep the last calendar snapshot.
+                            calendarTime = now;
+                        }
+                    }
                 }
             } catch (Exception e) {
                 error = e instanceof HaClient.HttpException
@@ -415,12 +449,13 @@ public class MainActivity extends Activity implements DashboardView.Actions {
                         : "Home Assistant connection unavailable";
             }
 
-            final JSONObject data = echoData;
             final JSONArray discoveredIds = discovered;
             final JSONArray states = fallbackStates;
             final JSONArray fetchedItems = nextItems;
+            final JSONObject fetchedCalendar = nextCalendar;
             final long nextDiscoveryTime = discoveryTime;
             final long nextTodoTime = todoTime;
+            final long nextCalendarTime = calendarTime;
             final String requestError = error;
 
             mainHandler.post(() -> {
@@ -435,13 +470,9 @@ public class MainActivity extends Activity implements DashboardView.Actions {
                     return;
                 }
                 try {
-                    if (data != null) {
-                        if (data.has("weather")) {
-                            snapshot.put("weather", data.get("weather"));
-                        }
-                        if (data.has("calendar")) {
-                            snapshot.put("calendar", data.get("calendar"));
-                        }
+                    if (fetchedCalendar != null && calendarId.equals(calendar)) {
+                        snapshot.put("calendar", fetchedCalendar);
+                        lastCalendar = nextCalendarTime;
                     }
 
                     sonosIds = discoveredIds;
@@ -472,6 +503,7 @@ public class MainActivity extends Activity implements DashboardView.Actions {
                         lastTodo = nextTodoTime;
                     }
 
+                    applyWeather(states);
                     snapshot.put("status", requestError == null
                             ? (client == null ? "Connect Home Assistant" : "")
                             : (feed != null && feed.isReady() ? "" : requestError));
@@ -488,6 +520,184 @@ public class MainActivity extends Activity implements DashboardView.Actions {
                 }
             });
         });
+    }
+
+    private void applyWeather(JSONArray fallbackStates) {
+        JSONObject state = null;
+        if (feed != null && feed.isReady()) {
+            state = feed.get(weather);
+        } else if (fallbackStates != null) {
+            for (int i = 0; i < fallbackStates.length(); i++) {
+                JSONObject candidate = fallbackStates.optJSONObject(i);
+                if (candidate != null && weather.equals(candidate.optString("entity_id"))) {
+                    state = candidate;
+                    break;
+                }
+            }
+        }
+
+        JSONObject mapped = mapWeather(state);
+        try {
+            if (mapped == null) {
+                snapshot.remove("weather");
+            } else {
+                snapshot.put("weather", mapped);
+            }
+        } catch (JSONException ignored) {
+            // Keep the last weather snapshot.
+        }
+    }
+
+    private static JSONObject mapWeather(JSONObject state) {
+        if (state == null) {
+            return null;
+        }
+        String condition = state.optString("state", "");
+        if (condition.isEmpty()
+                || "unavailable".equals(condition)
+                || "unknown".equals(condition)) {
+            return null;
+        }
+        JSONObject attributes = state.optJSONObject("attributes");
+        if (attributes == null || attributes.isNull("temperature")) {
+            return null;
+        }
+        double temperature = attributes.optDouble("temperature", Double.NaN);
+        if (!Double.isFinite(temperature)) {
+            return null;
+        }
+        try {
+            return new JSONObject()
+                    .put("temperatureValue", temperature)
+                    .put("temperatureScale", attributes.optString("temperature_unit", ""))
+                    .put("weatherSummary", weatherLabel(condition));
+        } catch (JSONException invalid) {
+            return null;
+        }
+    }
+
+    private static String weatherLabel(String condition) {
+        switch (condition) {
+            case "clear-night":
+                return "Clear";
+            case "cloudy":
+                return "Cloudy";
+            case "exceptional":
+                return "Exceptional";
+            case "fog":
+                return "Fog";
+            case "hail":
+                return "Hail";
+            case "lightning":
+                return "Lightning";
+            case "lightning-rainy":
+                return "Thunderstorms";
+            case "partlycloudy":
+                return "Partly cloudy";
+            case "pouring":
+                return "Pouring";
+            case "rainy":
+                return "Rain";
+            case "snowy":
+                return "Snow";
+            case "snowy-rainy":
+                return "Snow and rain";
+            case "sunny":
+                return "Sunny";
+            case "windy":
+            case "windy-variant":
+                return "Windy";
+            default:
+                return condition.replace('-', ' ');
+        }
+    }
+
+    private static JSONObject normalizeCalendar(JSONArray raw, long refreshedAt) {
+        List<JSONObject> events = new ArrayList<>();
+        Instant now = Instant.ofEpochMilli(refreshedAt);
+        for (int i = 0; raw != null && i < raw.length(); i++) {
+            JSONObject event = raw.optJSONObject(i);
+            if (event == null) {
+                continue;
+            }
+            String title = event.optString("summary", "").trim();
+            JSONObject start = event.optJSONObject("start");
+            JSONObject end = event.optJSONObject("end");
+            if (title.isEmpty() || start == null || end == null) {
+                continue;
+            }
+            try {
+                if (start.has("dateTime")) {
+                    Instant startInstant = parseCalendarInstant(start.getString("dateTime"));
+                    Instant endInstant = parseCalendarInstant(end.getString("dateTime"));
+                    if (endInstant.isAfter(now)) {
+                        events.add(calendarEvent(title, startInstant, endInstant, false));
+                    }
+                } else if (start.has("date")) {
+                    LocalDate firstDay = LocalDate.parse(start.getString("date"));
+                    LocalDate lastDay = LocalDate.parse(end.getString("date"));
+                    for (LocalDate day = firstDay;
+                            day.isBefore(lastDay);
+                            day = day.plusDays(1)) {
+                        Instant dayStart = day.atStartOfDay(ZoneId.systemDefault()).toInstant();
+                        Instant dayEnd = day.plusDays(1)
+                                .atStartOfDay(ZoneId.systemDefault())
+                                .toInstant();
+                        if (dayEnd.isAfter(now)) {
+                            events.add(calendarEvent(title, dayStart, dayEnd, true));
+                        }
+                    }
+                }
+            } catch (DateTimeException | JSONException invalid) {
+                // Skip events with unparseable times.
+            }
+        }
+
+        Collections.sort(events, new Comparator<JSONObject>() {
+            @Override
+            public int compare(JSONObject first, JSONObject second) {
+                int order = Instant.parse(first.optString("start"))
+                        .compareTo(Instant.parse(second.optString("start")));
+                if (order == 0) {
+                    order = Instant.parse(first.optString("end"))
+                            .compareTo(Instant.parse(second.optString("end")));
+                }
+                return order != 0
+                        ? order
+                        : first.optString("title").compareTo(second.optString("title"));
+            }
+        });
+
+        JSONArray output = new JSONArray();
+        for (JSONObject event : events) {
+            output.put(event);
+        }
+        try {
+            return new JSONObject()
+                    .put("events", output)
+                    .put("updatedAt", refreshedAt);
+        } catch (JSONException invalid) {
+            return new JSONObject();
+        }
+    }
+
+    private static JSONObject calendarEvent(
+            String title, Instant start, Instant end, boolean allDay) throws JSONException {
+        return new JSONObject()
+                .put("title", title)
+                .put("start", start.toString())
+                .put("end", end.toString())
+                .put("allDay", allDay);
+    }
+
+    private static Instant parseCalendarInstant(String value) {
+        try {
+            return OffsetDateTime.parse(value).toInstant();
+        } catch (DateTimeException noOffset) {
+            return LocalDateTime.parse(value)
+                    .atZone(ZoneId.systemDefault())
+                    .toInstant();
+        }
     }
 
     private void command(Job job) {
@@ -552,6 +762,7 @@ public class MainActivity extends Activity implements DashboardView.Actions {
             feed.requestSnapshot();
         }
         lastTodo = 0;
+        lastCalendar = 0;
         refresh(true);
     }
 
@@ -1094,6 +1305,16 @@ public class MainActivity extends Activity implements DashboardView.Actions {
         list.setOnClickListener(view -> chooseTodo());
         form.addView(list);
 
+        Button calendarButton = new Button(this);
+        calendarButton.setText("Calendar: " + config.optString("calendarName", calendar));
+        calendarButton.setOnClickListener(view -> chooseCalendar());
+        form.addView(calendarButton);
+
+        Button weatherButton = new Button(this);
+        weatherButton.setText("Weather: " + config.optString("weatherName", weather));
+        weatherButton.setOnClickListener(view -> chooseWeather());
+        form.addView(weatherButton);
+
         Button music = new Button(this);
         music.setText("Browse Sonos music");
         music.setOnClickListener(view -> browse(null, null));
@@ -1128,6 +1349,74 @@ public class MainActivity extends Activity implements DashboardView.Actions {
                     }
                 })
                 .show();
+    }
+
+    private void chooseCalendar() {
+        List<String> ids = new ArrayList<>();
+        List<String> names = new ArrayList<>();
+        collectEntities("calendar.", ids, names);
+        if (ids.isEmpty()) {
+            toast("Connect Home Assistant to choose a calendar");
+            return;
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("Calendar")
+                .setItems(names.toArray(new String[0]), (dialog, which) -> {
+                    calendar = ids.get(which);
+                    try {
+                        config.put("calendarName", names.get(which));
+                    } catch (JSONException ignored) {
+                        // The selected id still applies for this session.
+                    }
+                    saveConfig();
+                    snapshot.remove("calendar");
+                    lastCalendar = 0;
+                    render();
+                    refresh(true);
+                })
+                .show();
+    }
+
+    private void chooseWeather() {
+        List<String> ids = new ArrayList<>();
+        List<String> names = new ArrayList<>();
+        collectEntities("weather.", ids, names);
+        if (ids.isEmpty()) {
+            toast("Connect Home Assistant to choose the weather");
+            return;
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("Weather")
+                .setItems(names.toArray(new String[0]), (dialog, which) -> {
+                    weather = ids.get(which);
+                    try {
+                        config.put("weatherName", names.get(which));
+                    } catch (JSONException ignored) {
+                        // The selected id still applies for this session.
+                    }
+                    saveConfig();
+                    snapshot.remove("weather");
+                    render();
+                    refresh(true);
+                })
+                .show();
+    }
+
+    private void collectEntities(String domain, List<String> ids, List<String> names) {
+        JSONArray states = feed != null && feed.isReady() ? feed.snapshot() : allStates;
+        for (int i = 0; i < states.length(); i++) {
+            JSONObject state = states.optJSONObject(i);
+            String id = state.optString("entity_id");
+            if (id.startsWith(domain)) {
+                JSONObject attributes = state.optJSONObject("attributes");
+                ids.add(id);
+                names.add(attributes == null
+                        ? id
+                        : attributes.optString("friendly_name", id));
+            }
+        }
     }
 
     private void chooseTodo() {
